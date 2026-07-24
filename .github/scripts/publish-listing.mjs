@@ -5,9 +5,11 @@
  *   POST https://mcpcommons.com/api/v1/tools/{slug}/versions
  *
  * Notes on the API this targets (https://mcpcommons.com/api):
- *   - There is no PATCH/PUT for a listing. Name, summary, tags and category are
- *     edited in the dashboard; this endpoint publishes a *version* for review,
- *     which is what a release should do.
+ *   - `version`, `repo` and `tools` are required. Every other field is optional
+ *     and, when sent, updates the listing exactly as the creator form does.
+ *   - `tools` is the declared tool surface the review checks the code against,
+ *     so it is collected from the running server by collect-tools.mjs rather
+ *     than maintained by hand. Omitting it is rejected outright.
  *   - Versions are immutable. Re-publishing one returns 409 `version_exists`.
  *     That is treated here as an idempotent no-op so re-running a release job
  *     does not fail the build.
@@ -17,7 +19,8 @@
  * Reads configuration from the environment so nothing sensitive is ever passed
  * on argv (argv is visible to other processes; env is not).
  *
- * Required : MCPC_API_KEY, MCPC_SLUG, MCPC_VERSION, MCPC_REPO, MCPC_REF
+ * Required : MCPC_API_KEY, MCPC_SLUG, MCPC_VERSION, MCPC_REPO, MCPC_REF,
+ *            MCPC_TOOLS_FILE (JSON array of { name, description })
  * Optional : MCPC_LANGUAGE (default "typescript"), MCPC_TRANSPORT (default
  *            "stdio"), MCPC_EGRESS (JSON array), MCPC_DRY_RUN ("true"),
  *            MCPC_API_BASE (default "https://mcpcommons.com/api/v1")
@@ -72,11 +75,47 @@ function versionFromTag(tag) {
   return tag.replace(/^v/, '');
 }
 
+/**
+ * Loads the tool surface collected from the running server. Required by the
+ * API, and validated here so a malformed file fails before a request is spent
+ * against the 10-per-hour limit.
+ */
+async function loadTools(path) {
+  const { readFile } = await import('node:fs/promises');
+  let raw;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (err) {
+    fail(`Could not read the tool surface at ${path}: ${err?.message ?? err}`, 'Run collect-tools.mjs first.');
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    fail(`${path} is not valid JSON.`);
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    fail(`${path} must be a non-empty array of tools. Publishing an empty tool surface is rejected by the API.`);
+  }
+  const malformed = parsed.filter(
+    (tool) => typeof tool?.name !== 'string' || typeof tool?.description !== 'string' || tool.name === '' || tool.description === '',
+  );
+  if (malformed.length > 0) {
+    fail(`Every entry in ${path} needs a non-empty name and description; ${malformed.length} do not.`);
+  }
+
+  return parsed.map((tool) => ({ name: tool.name, description: tool.description }));
+}
+
 const apiKey = required('MCPC_API_KEY');
 const slug = required('MCPC_SLUG');
 const ref = required('MCPC_REF');
 const version = versionFromTag(process.env.MCPC_VERSION?.trim() || ref);
 const repo = required('MCPC_REPO');
+
+const tools = await loadTools(required('MCPC_TOOLS_FILE'));
 
 const body = {
   version,
@@ -84,6 +123,7 @@ const body = {
   ref,
   language: process.env.MCPC_LANGUAGE?.trim() || 'typescript',
   transport: process.env.MCPC_TRANSPORT?.trim() || 'stdio',
+  tools,
 };
 
 const egress = parseEgress(process.env.MCPC_EGRESS);
@@ -97,7 +137,8 @@ const endpoint = `${API_BASE}/tools/${encodeURIComponent(slug)}/versions`;
 
 console.log(`Publishing ${slug} version ${version} (ref ${ref}) to MCP Commons`);
 console.log(`  endpoint : POST ${endpoint}`);
-console.log(`  body     : ${JSON.stringify(body, null, 2)}`);
+console.log(`  tools    : ${tools.length} (${tools.map((t) => t.name).join(', ')})`);
+console.log(`  body     : ${JSON.stringify({ ...body, tools: `[${tools.length} tools]` }, null, 2)}`);
 
 if (process.env.MCPC_DRY_RUN === 'true') {
   annotate.notice(`Dry run: would publish ${slug}@${version}. No request sent.`);
@@ -177,6 +218,13 @@ if (response.status === 202) {
       `| Transport | \`${body.transport}\` |`,
       `| Language | \`${body.language}\` |`,
       `| Egress allowlist | ${egress ? egress.map((h) => `\`${h}\``).join(', ') : '_not sent_'} |`,
+      `| Tools declared | ${tools.length} |`,
+      ``,
+      `<details><summary>Declared tool surface (collected from the running server)</summary>`,
+      ``,
+      ...tools.map((tool) => `- \`${tool.name}\``),
+      ``,
+      `</details>`,
       ``,
       `Review is automated; flagged submissions are held for a human.`,
       `Track it at https://mcpcommons.com/listing/${slug}`,

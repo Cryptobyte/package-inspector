@@ -4,7 +4,7 @@
 
 Package Inspector is a local [Model Context Protocol](https://modelcontextprotocol.io) server that lets an AI coding assistant answer real questions about npm dependencies: what a package is, who maintains it, what it pulls in, whether it has known CVEs, how much it weighs, whether it looks like a supply-chain risk, and whether anyone actually uses it. It reads from public registry and advisory APIs, cross-references the signals, and returns both a plain-language verdict and structured JSON — so the assistant can answer immediately or reason further. It needs no API keys, no account, and no configuration.
 
-Developed for demo on [MCP Commons](https://mcpcommons.com) an MCP marketplace for free and paid MCP servers.
+Developed for demo on [MCP Commons](https://mcpcommons.com) an MCP marketplace for free and paid MCP servers. See [Deploy Scripts](/.github/) for an auto deploy script example.
 
 ---
 
@@ -164,13 +164,13 @@ grep -rn "fetch(" src/     # exactly one hit: src/lib/http.ts
 
 ### Hostnames that appear in the code but are never contacted
 
-Automated scanners often flag `github.com`, `gitlab.com` and `osv.dev` in this repo. None of them are network destinations — they are URL-shaped **strings**, not fetch targets:
+Automated scanners flag a few hostnames in this repo. None is a network destination — they are URL-shaped **strings**, not fetch targets:
 
 | Hostname | Why it appears | Contacted? |
 | --- | --- | --- |
 | `github.com` | `normalizeRepositoryUrl` in [`src/lib/format.ts`](src/lib/format.ts) rewrites npm's `repository` field into a canonical URL (`git@github.com:a/b` → `https://github.com/a/b`) for display. It is also the project's own `HOMEPAGE`, embedded in the `User-Agent` string, and it shows up in advisory `references` that OSV returns **as data**. | No |
 | `gitlab.com` | Appears only in one unit-test assertion for the same URL-normalising function. It occurs nowhere in `src/`. | No |
-| `osv.dev` | A `source: "https://osv.dev"` attribution field in `check_vulnerabilities` output, so consumers know where the advisories came from. The actual endpoint is `api.osv.dev`, listed above. | No |
+| `mcpcommons.com` | Release tooling in [`.github/scripts/`](.github/scripts/) that runs in GitHub Actions to publish the marketplace listing. It is not part of the server and is never loaded by it; a test asserts the host never appears under `src/`. | No |
 
 Repository URLs are normalised for display and returned in the JSON so a human or model can click them. The server never resolves, fetches, or validates them, and a request to any of these hosts throws before a socket is opened.
 

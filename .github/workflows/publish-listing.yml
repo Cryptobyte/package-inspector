@@ -2,9 +2,15 @@ name: Publish to MCP Commons
 
 # Publishes a new version of the listing at
 # https://mcpcommons.com/listing/package-inspector whenever a GitHub release is
-# published. The MCP Commons API has no update endpoint for listing metadata
-# (name, summary, tags, category live in the dashboard) — releasing publishes a
-# new *version* for review, which is what this does.
+# published. Optional fields sent alongside the version update the listing the
+# same way the creator form does, so the egress allowlist and tool surface here
+# also correct whatever the listing currently shows.
+#
+# Both of those are derived from the code rather than written by hand:
+#   - egress_allowlist  <- ALLOWED_HOSTS in src/lib/http.ts
+#   - tools             <- tools/list on the built server
+# The security review checks the declaration against the source, so anything
+# hand-maintained is a review failure waiting to happen.
 #
 # Setup, once:
 #   1. Mint an API key at https://mcpcommons.com/keys
@@ -123,9 +129,17 @@ jobs:
           echo "hosts=$HOSTS" >> "$GITHUB_OUTPUT"
           echo "Declaring egress allowlist: $HOSTS"
 
+      # The API requires a `tools` array and the review checks it against the
+      # code, so it is collected by booting the built server and calling
+      # tools/list — never hand-maintained. This also proves the entrypoint the
+      # manifest advertises actually starts.
+      - name: Collect tool surface from the running server
+        run: node .github/scripts/collect-tools.mjs tools.json
+
       - name: Publish version
         env:
           MCPC_API_KEY: ${{ secrets.MCPC_API_KEY }}
+          MCPC_TOOLS_FILE: tools.json
           MCPC_SLUG: ${{ env.MCPC_SLUG }}
           MCPC_VERSION: ${{ steps.tag.outputs.version }}
           MCPC_REF: ${{ steps.tag.outputs.tag }}
