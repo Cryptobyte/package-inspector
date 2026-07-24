@@ -11,6 +11,9 @@ import { highestRating, normalizeRating, ratingRank, scoreCvss, type CvssRating 
 import { truncate } from './format.js';
 
 const OSV_ENDPOINT = 'https://api.osv.dev/v1/query';
+const OSV_BATCH_ENDPOINT = 'https://api.osv.dev/v1/querybatch';
+/** OSV caps a batch; chunking keeps large lockfiles within it. */
+const OSV_BATCH_CHUNK = 500;
 
 interface OsvSeverity {
   type?: string;
@@ -226,4 +229,57 @@ export async function queryOsv(name: string, version: string): Promise<Vulnerabi
     const vulns = (raw?.vulns ?? []).filter((vuln) => !vuln.withdrawn);
     return summarizeAdvisories(vulns.map((vuln) => toAdvisory(vuln, name)));
   });
+}
+
+// ---------------------------------------------------------------------------
+// Batch screening
+// ---------------------------------------------------------------------------
+
+export interface BatchTarget {
+  name: string;
+  version: string;
+}
+
+/**
+ * Screens many packages for advisories in a single request.
+ *
+ * The batch endpoint deliberately returns an *index* — advisory ids only, no
+ * summaries or severities. That is exactly what an audit wants for the first
+ * pass: most dependencies are clean, so this identifies the handful that are
+ * not, and only those need a full `queryOsv` to be described properly.
+ *
+ * Returns a map of `name@version` to the advisory ids affecting it. Packages
+ * with no advisories are absent from the map.
+ */
+export async function screenOsvBatch(targets: readonly BatchTarget[]): Promise<Map<string, string[]>> {
+  const affected = new Map<string, string[]>();
+  if (targets.length === 0) return affected;
+
+  for (let offset = 0; offset < targets.length; offset += OSV_BATCH_CHUNK) {
+    const chunk = targets.slice(offset, offset + OSV_BATCH_CHUNK);
+
+    const raw = await fetchJson<{ results?: Array<{ vulns?: Array<{ id?: string }> }> }>(OSV_BATCH_ENDPOINT, {
+      method: 'POST',
+      body: {
+        queries: chunk.map((target) => ({
+          package: { name: target.name, ecosystem: 'npm' },
+          version: target.version,
+        })),
+      },
+      source: 'OSV',
+      // A batch of 500 is more work for OSV than a single query.
+      timeoutMs: 20_000,
+    });
+
+    // Results are positional: index i corresponds to queries[i].
+    const results = raw?.results ?? [];
+    chunk.forEach((target, index) => {
+      const ids = (results[index]?.vulns ?? [])
+        .map((vuln) => vuln?.id)
+        .filter((id): id is string => typeof id === 'string');
+      if (ids.length > 0) affected.set(`${target.name}@${target.version}`, ids);
+    });
+  }
+
+  return affected;
 }

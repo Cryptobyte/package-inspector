@@ -260,7 +260,11 @@ export async function getAbbreviatedPackument(name: string): Promise<Abbreviated
  * Fetches a single version manifest (`/pkg/1.2.3`), which the registry serves
  * with `scripts` and `_npmUser` intact — both needed for supply-chain analysis.
  */
-export async function getVersionManifest(name: string, version: string): Promise<VersionManifest> {
+export async function getVersionManifest(
+  name: string,
+  version: string,
+  options: { timeoutMs?: number } = {},
+): Promise<VersionManifest> {
   const pkg = assertValidPackageName(name);
   const spec = assertValidVersionSpec(version);
 
@@ -268,6 +272,9 @@ export async function getVersionManifest(name: string, version: string): Promise
     const raw = await fetchJson<VersionManifest>(`${REGISTRY}/${registryPath(pkg)}/${encodeURIComponent(spec)}`, {
       source: 'npm registry',
       notFoundAsNull: true,
+      // Callers fanning out over a whole tree pass a shorter budget so one
+      // straggler cannot monopolise a concurrency slot.
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     });
     if (!raw || !raw.version) {
       // Distinguish "no such package" from "no such version" for a better message.

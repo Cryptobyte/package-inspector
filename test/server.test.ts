@@ -27,6 +27,7 @@ import { SERVER_NAME, SERVER_VERSION, USER_AGENT } from '../src/lib/version.js';
 
 const EXPECTED_TOOLS = [
   'inspect_package',
+  'audit_dependencies',
   'list_versions',
   'dependency_tree',
   'check_vulnerabilities',
@@ -38,7 +39,7 @@ const EXPECTED_TOOLS = [
 ];
 
 describe('tool registry', () => {
-  it('registers exactly the nine documented tools', () => {
+  it('registers exactly the ten documented tools', () => {
     assert.deepEqual(
       TOOLS.map((tool) => tool.name),
       EXPECTED_TOOLS,

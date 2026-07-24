@@ -6,6 +6,75 @@ containing a human-readable summary followed by the full structured JSON.
 
 ---
 
+## `audit_dependencies`
+
+**Call:** `{ "manifest": "<contents of package-lock.json>" }`
+
+```
+🟠 package-inspector — 1 vulnerable dependency (highest severity medium)
+Audited 92 of 92 declared (the full dependency tree, from package-lock.json v3)
+
+Vulnerable: 1 · critical 0, high 0, medium 1, low 0
+Deprecated: 0 · Install scripts: 0 · License concerns: 0
+⚠️ 1 dependency could not be checked for deprecation, install scripts or license — unknown, not clean.
+
+Fix in this order:
+1. @hono/node-server@1.19.15 — Upgrade to 2.0.5
+   1 known vulnerability, highest medium
+
+Notes:
+- Registry metadata could not be read for 1 of 92 dependencies (usually a timeout under load).
+  Their deprecation, install-script and license status is unknown, not clean — re-run to check them.
+```
+
+And a deliberately outdated `package.json`:
+
+```
+🔴 legacy-app — 2 vulnerable dependencies (highest severity critical)
+Audited 4 of 4 declared (direct dependencies, from package.json)
+
+Vulnerable: 2 · critical 1, high 3, medium 4, low 0
+Deprecated: 1 · Install scripts: 0 · License concerns: 0
+
+Fix in this order:
+1. minimist@1.2.0 — Review each advisory; no single published version clears them all
+   2 known vulnerabilities, highest critical
+2. left-pad@1.3.0 — Replace it
+   Deprecated: use String.prototype.padStart()
+3. lodash@4.17.15 — Review each advisory; no single published version clears them all
+   6 known vulnerabilities, highest high
+
+1 dependency could not be audited (git, file, or workspace specifiers): broken
+
+Note: this audited declared direct dependencies only. Pass a package-lock.json to audit
+the whole installed tree.
+```
+
+### How it stays cheap
+
+| Pass | Requests |
+| --- | ---: |
+| Screen every dependency for advisories (OSV batch — ids only) | **1** |
+| Full advisory detail | only for the packages actually hit |
+| Deprecation, install scripts, licence | 1 small registry read per package |
+
+The batch endpoint returns an *index*, not detail, which is exactly right for a
+first pass: most dependencies are clean, so only the handful that are not need a
+full lookup.
+
+### Unknown is not clean
+
+The tool distinguishes "we checked and it is fine" from "we could not check".
+An early version reported every timed-out metadata lookup as *"No license
+declared"* — seven fabricated findings against packages that are all MIT. Now a
+failed lookup is reported as a coverage gap, counted in `counts.unchecked`, kept
+out of the fix list, and retried once before the audit gives up on it.
+
+Pass the file **contents**, not a path: this server never reads the filesystem,
+and your MCP client already has that access.
+
+---
+
 ## `inspect_package`
 
 **Call:** `{ "name": "left-pad", "version": "1.3.0" }`
@@ -121,7 +190,7 @@ JSON (advisory list trimmed to the first entry here — the real response contai
   ],
   "safeUpgradeVersions": ["4.18.1", "4.18.0"],
   "recommendedUpgrade": "4.18.0",
-  "source": "https://osv.dev"
+  "source": "https://api.osv.dev"
 }
 ```
 

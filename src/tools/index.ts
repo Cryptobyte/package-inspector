@@ -1,4 +1,5 @@
 import { analyzeSupplyChainTool } from './analyze-supply-chain.js';
+import { auditDependenciesTool } from './audit-dependencies.js';
 import { checkVulnerabilitiesTool } from './check-vulnerabilities.js';
 import { compareVersionsTool } from './compare-versions.js';
 import { dependencyTreeTool } from './dependency-tree.js';
@@ -11,6 +12,7 @@ import type { RegisteredTool } from './types.js';
 
 export const TOOLS: readonly RegisteredTool[] = [
   inspectPackageTool,
+  auditDependenciesTool,
   listVersionsTool,
   dependencyTreeTool,
   checkVulnerabilitiesTool,

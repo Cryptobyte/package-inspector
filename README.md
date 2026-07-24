@@ -12,6 +12,7 @@ Developed for demo on [MCP Commons](https://mcpcommons.com) an MCP marketplace f
 
 | Tool | What it does |
 | --- | --- |
+| **`audit_dependencies`** | Audits a whole project from its package.json or package-lock.json: vulnerabilities, deprecations, install scripts and licence problems across every dependency, with a prioritised fix list. |
 | **`inspect_package`** | Full overview: description, resolved version, license, maintainers, repository, dist-tags, deprecation, publish date, Node engines, TypeScript types, weekly downloads. |
 | **`list_versions`** | Recent versions newest-first with publish dates, latest/deprecated markers, and release-cadence stats (median gap, releases in the last 90 days). |
 | **`dependency_tree`** | Resolves the install graph to a given depth with unique-dependency counts, max depth, version conflicts, install-script detection, and the heaviest sub-trees. |
@@ -134,7 +135,7 @@ Add to `.vscode/mcp.json` in your workspace:
 ### Verifying it works without a client
 
 If a client reports the server disconnecting, check the build directly — this
-should print an `initialize` response and a list of nine tools:
+should print an `initialize` response and a list of ten tools:
 
 ```bash
 printf '%s\n%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cli","version":"1"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | node dist/index.js
@@ -199,6 +200,7 @@ Once connected, try asking your assistant:
 - *"Which of my dependencies run postinstall scripts?"*
 - *"Will adding `moment` bloat my bundle? What about `date-fns`?"*
 - *"Is `zod` gaining or losing traction?"*
+- *"Audit my package-lock.json — what should I fix first?"*
 
 See [`docs/examples.md`](docs/examples.md) for real, unedited tool output.
 
@@ -241,6 +243,7 @@ src/
     osv.ts            Vulnerability advisory client
     sizes.ts          bundlephobia bundle-size client
     install-size.ts   Registry-derived install footprint estimation
+    manifest.ts       package.json / package-lock.json parsing
     semver.ts         Dependency-free semver parsing and range matching
     cvss.ts           CVSS v3 base score calculation
     format.ts         Byte/date/percentage humanisation
