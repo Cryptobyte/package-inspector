@@ -57,12 +57,26 @@ export interface ReleaseCadence {
   daysSinceLastRelease: number | null;
 }
 
+/**
+ * Derives release cadence from a version -> publish-time map.
+ *
+ * `lastPublishedAt` is returned from here rather than read off the packument's
+ * `modified` field: `modified` bumps on *any* packument edit, including
+ * deprecating an old version, so it can be weeks newer than the last actual
+ * release and makes a dormant package look freshly maintained. Deriving it from
+ * the same sorted timeline as `daysSinceLastRelease` makes the two agree by
+ * construction.
+ */
 export function computeCadence(
   timeline: ReadonlyArray<{ version: string; publishedAt: string | null }>,
   now: Date = new Date(),
 ): Pick<
   ReleaseCadence,
-  'averageDaysBetweenReleases' | 'medianDaysBetweenReleases' | 'releasesLast90Days' | 'daysSinceLastRelease'
+  | 'averageDaysBetweenReleases'
+  | 'medianDaysBetweenReleases'
+  | 'releasesLast90Days'
+  | 'daysSinceLastRelease'
+  | 'lastPublishedAt'
 > {
   const dated = timeline
     .filter((entry): entry is { version: string; publishedAt: string } => entry.publishedAt !== null)
@@ -75,7 +89,8 @@ export function computeCadence(
       averageDaysBetweenReleases: null,
       medianDaysBetweenReleases: null,
       releasesLast90Days: 0,
-      daysSinceLastRelease: null
+      daysSinceLastRelease: null,
+      lastPublishedAt: null
     };
   }
 
@@ -100,13 +115,20 @@ export function computeCadence(
     averageDaysBetweenReleases: gaps.length === 0 ? null : Number((gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length).toFixed(1)),
     medianDaysBetweenReleases: median === null ? null : Number(median.toFixed(1)),
     releasesLast90Days: dated.filter((entry) => entry.at >= cutoff).length,
-    daysSinceLastRelease: Math.max(0, Math.round((now.getTime() - last.at) / 86_400_000))
+    daysSinceLastRelease: Math.max(0, Math.round((now.getTime() - last.at) / 86_400_000)),
+    lastPublishedAt: new Date(last.at).toISOString()
   };
 }
 
 export interface ListVersionsResult {
   name: string;
   latestVersion: string | null;
+  /**
+   * When the `latest` version itself was published. Distinct from
+   * `cadence.lastPublishedAt`, which is the most recent publish of *any*
+   * version — they differ when a maintainer backports to an older line.
+   */
+  latestPublishedAt: string | null;
   distTags: Record<string, string>;
   returned: number;
   truncated: boolean;
@@ -147,7 +169,11 @@ function buildSummary(result: ListVersionsResult): string {
 
   return lines(
     `${result.name}: ${cadence.totalVersions} versions published, ${rhythm}.${activity}`,
-    `Latest: ${result.latestVersion ?? 'unknown'} (${relativeTime(cadence.lastPublishedAt)})`,
+    `Latest: ${result.latestVersion ?? 'unknown'} (${relativeTime(result.latestPublishedAt)})`,
+    // Only worth saying when a backport to an older line is the newest publish.
+    cadence.lastPublishedAt && cadence.lastPublishedAt !== result.latestPublishedAt
+      ? `Most recent publish of any version: ${relativeTime(cadence.lastPublishedAt)} (an older release line).`
+      : null,
     cadence.deprecatedVersions > 0 ? `${cadence.deprecatedVersions} version(s) are deprecated.` : null,
     '',
     `Most recent ${Math.min(5, result.versions.length)} of ${result.returned} returned:`,
@@ -188,6 +214,7 @@ export async function listVersions(args: ListVersionsInput): Promise<ListVersion
   return {
     name: packument.name,
     latestVersion: packument.distTags.latest ?? null,
+    latestPublishedAt: latest ? (packument.time[latest] ?? null) : null,
     distTags: packument.distTags,
     returned: versions.length,
     truncated: pool.length > versions.length,
@@ -198,7 +225,8 @@ export async function listVersions(args: ListVersionsInput): Promise<ListVersion
       prereleaseVersions: packument.versions.filter((version) => isPrerelease(version)).length,
       deprecatedVersions: Object.keys(packument.deprecatedVersions).length,
       firstPublishedAt: packument.time.created ?? null,
-      lastPublishedAt: packument.time.modified ?? (latest ? (packument.time[latest] ?? null) : null),
+      // lastPublishedAt comes from computeCadence, derived from real publish
+      // times — never from the packument's `modified` field.
       ...computeCadence(timeline)
     }
   };

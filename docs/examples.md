@@ -362,26 +362,65 @@ Bundle (min+gzip): 6.9 KB → 13 KB (+5.9 KB, +86.5%)
 
 ## `package_size`
 
-**Call:** `{ "name": "zod" }`
+**Call:** `{ "name": "express", "version": "4.18.2" }`
 
 ```
-zod@4.4.3 size report
+express@4.18.2 size report
 
-Install footprint: unavailable (packagephobia has no data for this version).
-Bundle (min+gzip): 60 KB · minified: 275 KB · 0 dependencies
-Tarball unpacked (this package alone): 4.3 MB across 718 files
-Download time for the bundle: 9.89 s on slow 3G, 560 ms on 4G
-Declares `sideEffects: false` — safely tree-shakeable.
-
-Notes:
-- packagephobia: packagephobia is rate limiting requests (HTTP 429). Try again in a moment.
+Install footprint (estimated from registry metadata): ~1.9 MB on disk across 71 packages ·
+  lower bound: the registry publishes no size for 17 of 71 packages (mostly pre-2018 publishes)
+Bundle (min+gzip): 240 KB · minified: 595 KB · 31 dependencies
+Tarball unpacked (this package alone): 209 KB across 16 files
+Download time for the bundle: 39.4 s on slow 3G, 2.25 s on 4G
+⚠️ Declares side effects — bundlers cannot tree-shake it away.
+⚠️ 1 package(s) resolve at multiple versions and are counted once each: ms (2.0.0, 2.1.3)
+Heaviest packages on disk: iconv-lite@0.4.24 (328 KB), qs@6.11.0 (224 KB),
+  express@4.18.2 (209 KB), mime-db@1.52.0 (201 KB), object-inspect@1.13.4 (101 KB)
 ```
 
-This is what graceful degradation looks like: packagephobia was rate-limiting,
-so the install-footprint section reports itself as unavailable and says why,
-while everything else — bundle size, tarball size from the registry, download
-times, tree-shakeability — is returned normally. One flaky upstream never fails
-the whole call.
+The install footprint is computed by resolving the production dependency graph
+and summing `dist.unpackedSize`, using nothing but `registry.npmjs.org` — no
+third-party size service is involved. Validated against a real install:
+
+| | bytes |
+| --- | ---: |
+| Estimate | 1,999,033 |
+| `npm install express@4.18.2`, measured | 2,198,164 |
+| Accuracy | **90.9%** |
+
+The 9% shortfall is fully explained by the 17 dependencies published before npm
+began recording `unpackedSize` around 2018 (`etag@1.8.1`, `vary@1.1.2`,
+`debug@2.6.9`…). That is why the figure is presented as a **lower bound** with
+an explicit coverage count rather than as a measurement.
+
+The structured output carries the full picture:
+
+```json
+{
+  "estimatedInstall": {
+    "totalSize": { "bytes": 1999033, "human": "1.9 MB" },
+    "selfSize": { "bytes": 214459, "human": "209 KB" },
+    "optionalSize": { "bytes": 0, "human": "0 B" },
+    "packageCount": 71,
+    "uniqueNames": 70,
+    "coverage": 0.761,
+    "missingSizeCount": 17,
+    "missingSizePackages": ["etag@1.8.1", "vary@1.1.2", "debug@2.6.9", "fresh@0.5.2"],
+    "conflictingPackages": [{ "name": "ms", "versions": ["2.0.0", "2.1.3"] }],
+    "depthReached": 7,
+    "truncated": false,
+    "method": "Sum of dist.unpackedSize across the resolved production dependency graph.",
+    "caveats": [
+      "Counts each distinct name@version once, approximating npm hoisting; a real install duplicates a package when dependents need incompatible versions.",
+      "Includes optional dependencies, which npm skips when their os/cpu do not match the host. Subtract optionalSize for a platform-agnostic floor.",
+      "Cannot see lockfile pins, overrides/resolutions, or bundledDependencies.",
+      "Excludes devDependencies, matching a production install.",
+      "17 of 71 packages publish no unpackedSize, so the total is a lower bound."
+    ],
+    "source": "https://registry.npmjs.org"
+  }
+}
+```
 
 ---
 

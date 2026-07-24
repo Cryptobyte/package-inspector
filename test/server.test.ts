@@ -9,7 +9,17 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { TOOLS, TOOLS_BY_NAME } from '../src/tools/index.js';
-import { ALLOWED_HOSTS, cached, cacheStats, clearCache, fetchJson } from '../src/lib/http.js';
+import {
+  ALLOWED_HOSTS,
+  cached,
+  cacheStats,
+  clearCache,
+  computeBackoffMs,
+  DEFAULT_RETRY,
+  fetchJson,
+  isBotChallenge,
+  PATIENT_RETRY,
+} from '../src/lib/http.js';
 import { assertValidPackageName, assertValidVersionSpec, normalizeLicense, normalizePerson, resolveVersion, shipsOwnTypes, typesPackageName, type Packument } from '../src/lib/npm.js';
 import { ToolError, describeError, optional } from '../src/lib/errors.js';
 import { mapLimit } from '../src/lib/concurrency.js';
@@ -85,12 +95,11 @@ describe('tool registry', () => {
 });
 
 describe('network allowlist', () => {
-  it('lists exactly the five documented hosts', () => {
+  it('lists exactly the four documented hosts', () => {
     assert.deepEqual([...ALLOWED_HOSTS].sort(), [
       'api.npmjs.org',
       'api.osv.dev',
       'bundlephobia.com',
-      'packagephobia.com',
       'registry.npmjs.org',
     ]);
   });
@@ -154,6 +163,87 @@ describe('network allowlist', () => {
       ['lib/http.ts'],
       'a new fetch() appeared outside the allowlisted wrapper',
     );
+  });
+});
+
+describe('bot-challenge detection', () => {
+  const headers = (init: Record<string, string>): Headers => new Headers(init);
+
+  it("recognises Vercel's challenge, which arrives as a 429", () => {
+    assert.equal(
+      isBotChallenge(429, headers({ 'x-vercel-mitigated': 'challenge', 'content-type': 'text/html; charset=utf-8' })),
+      true,
+    );
+    assert.equal(isBotChallenge(429, headers({ 'x-vercel-challenge-token': 'abc' })), true);
+  });
+
+  it("recognises Cloudflare's equivalent", () => {
+    assert.equal(isBotChallenge(403, headers({ 'cf-mitigated': 'challenge' })), true);
+    assert.equal(isBotChallenge(503, headers({ 'cf-chl-bypass': '1' })), true);
+  });
+
+  it('treats an HTML body on a 429 as a challenge, since we asked for JSON', () => {
+    assert.equal(isBotChallenge(429, headers({ 'content-type': 'text/html' })), true);
+  });
+
+  it('does not mistake a genuine JSON rate limit for a challenge', () => {
+    // This must still go down the retry path.
+    assert.equal(isBotChallenge(429, headers({ 'content-type': 'application/json', 'retry-after': '1' })), false);
+    assert.equal(isBotChallenge(503, headers({ 'content-type': 'application/json' })), false);
+  });
+
+  it('ignores successful and not-found responses entirely', () => {
+    assert.equal(isBotChallenge(200, headers({ 'content-type': 'text/html' })), false);
+    assert.equal(isBotChallenge(404, headers({ 'content-type': 'text/html' })), false);
+  });
+});
+
+describe('retry backoff', () => {
+  // jitter = 0 makes the schedule deterministic.
+  const noJitter = 0;
+
+  it('doubles the delay on each successive retry', () => {
+    assert.equal(computeBackoffMs(1, DEFAULT_RETRY, null, noJitter), 500);
+    assert.equal(computeBackoffMs(2, DEFAULT_RETRY, null, noJitter), 1000);
+    assert.equal(computeBackoffMs(3, DEFAULT_RETRY, null, noJitter), 2000);
+  });
+
+  it('never exceeds maxDelayMs', () => {
+    assert.equal(computeBackoffMs(9, DEFAULT_RETRY, null, noJitter), DEFAULT_RETRY.maxDelayMs);
+    assert.equal(computeBackoffMs(9, PATIENT_RETRY, null, noJitter), PATIENT_RETRY.maxDelayMs);
+  });
+
+  it("prefers the server's Retry-After over the exponential guess", () => {
+    assert.equal(computeBackoffMs(1, DEFAULT_RETRY, 1500, noJitter), 1500);
+  });
+
+  it('caps an unreasonably long Retry-After instead of stalling the tool call', () => {
+    // A server asking for 5 minutes must not block a tool call for 5 minutes.
+    assert.equal(computeBackoffMs(1, DEFAULT_RETRY, 300_000, noJitter), DEFAULT_RETRY.maxDelayMs);
+  });
+
+  it('treats Retry-After: 0 as a valid immediate retry', () => {
+    assert.equal(computeBackoffMs(1, DEFAULT_RETRY, 0, noJitter), 0);
+  });
+
+  it('adds up to 25% jitter so parallel callers do not retry in lockstep', () => {
+    assert.equal(computeBackoffMs(1, DEFAULT_RETRY, null, 1), 625); // 500 * 1.25
+    assert.equal(computeBackoffMs(1, DEFAULT_RETRY, null, 0.5), 563);
+    // Out-of-range jitter is clamped rather than trusted.
+    assert.equal(computeBackoffMs(1, DEFAULT_RETRY, null, 99), 625);
+    assert.equal(computeBackoffMs(1, DEFAULT_RETRY, null, -5), 500);
+  });
+
+  it('gives the rate-limiting size services a longer schedule than the default', () => {
+    assert.ok(PATIENT_RETRY.attempts > DEFAULT_RETRY.attempts);
+    assert.ok(PATIENT_RETRY.maxTotalDelayMs > DEFAULT_RETRY.maxTotalDelayMs);
+
+    // Worst case the extra attempts must stay within the total budget.
+    let spent = 0;
+    for (let attempt = 1; attempt < PATIENT_RETRY.attempts; attempt++) {
+      spent += computeBackoffMs(attempt, PATIENT_RETRY, null, 1);
+    }
+    assert.ok(spent <= PATIENT_RETRY.maxTotalDelayMs, `worst-case backoff ${spent}ms exceeds the budget`);
   });
 });
 

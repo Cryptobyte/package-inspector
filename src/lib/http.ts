@@ -18,7 +18,6 @@ export const ALLOWED_HOSTS: readonly string[] = Object.freeze([
   'registry.npmjs.org', // package metadata + search
   'api.npmjs.org', // download counts
   'api.osv.dev', // vulnerability advisories
-  'packagephobia.com', // install / publish size
   'bundlephobia.com', // minified + gzipped bundle size
 ]);
 
@@ -40,6 +39,8 @@ export interface FetchJsonOptions {
   notFoundAsNull?: boolean;
   /** Human-readable upstream name used in error messages. */
   source?: string;
+  /** Overrides for the retry schedule; merged over `DEFAULT_RETRY`. */
+  retry?: Partial<RetryPolicy>;
 }
 
 function assertAllowedHost(url: URL): void {
@@ -108,11 +109,91 @@ function retryAfterMs(res: Response): number | null {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+export interface RetryPolicy {
+  /** Total attempts, including the first. `1` disables retrying. */
+  attempts: number;
+  /** Delay before the first retry; doubles on each subsequent one. */
+  baseDelayMs: number;
+  /** Ceiling on any single sleep, including a server-supplied `Retry-After`. */
+  maxDelayMs: number;
+  /** Ceiling on time spent sleeping across all retries for one request. */
+  maxTotalDelayMs: number;
+}
+
+/** Conservative default: one quick retry, never blocking a tool call for long. */
+export const DEFAULT_RETRY: RetryPolicy = {
+  attempts: 2,
+  baseDelayMs: 500,
+  maxDelayMs: 2_000,
+  maxTotalDelayMs: 2_000,
+};
+
+/**
+ * bundlephobia builds packages on demand and rate-limits aggressively, so a
+ * single 500ms retry is frequently not enough. It gets more attempts and a
+ * longer backoff; it is an optional data source fetched in parallel with the
+ * rest, so the extra wait does not delay anything else.
+ */
+export const PATIENT_RETRY: RetryPolicy = {
+  attempts: 3,
+  baseDelayMs: 800,
+  maxDelayMs: 2_500,
+  maxTotalDelayMs: 4_000,
+};
+
+/**
+ * Detects a bot-protection challenge masquerading as a rate limit.
+ *
+ * Services behind Vercel's or Cloudflare's bot mitigation answer with HTTP 429
+ * plus an HTML challenge page. That status is indistinguishable from throttling
+ * by code alone, but the two need opposite handling: a throttle clears if you
+ * wait, a challenge never does. Retrying one wastes seconds per call and keeps
+ * hammering a host that already said no.
+ *
+ * We do not attempt to solve challenges. We detect them, stop, and say so.
+ */
+export function isBotChallenge(status: number, headers: Headers): boolean {
+  if (status !== 429 && status !== 403 && status !== 503) return false;
+
+  // Explicit mitigation markers are conclusive.
+  for (const header of ['x-vercel-mitigated', 'cf-mitigated']) {
+    const value = headers.get(header);
+    if (value && value.toLowerCase().includes('challenge')) return true;
+  }
+  if (headers.get('x-vercel-challenge-token') || headers.get('cf-chl-bypass')) return true;
+
+  // We asked for JSON and got an HTML page: an interstitial, not an API reply.
+  // Retrying a JSON request that yields HTML is not going to start working.
+  return (headers.get('content-type') ?? '').includes('text/html');
+}
+
+/**
+ * Exponential backoff with jitter, honouring `Retry-After` when the server
+ * sends one. `attempt` is 1-based (the delay *after* attempt 1 uses `attempt: 1`).
+ *
+ * Pure, with jitter injected, so the schedule can be unit tested.
+ */
+export function computeBackoffMs(
+  attempt: number,
+  policy: RetryPolicy,
+  retryAfterMs: number | null = null,
+  jitter: number = Math.random(),
+): number {
+  const exponential = policy.baseDelayMs * 2 ** Math.max(0, attempt - 1);
+  // A server's own Retry-After wins over our guess, but is still capped.
+  const base = retryAfterMs !== null && retryAfterMs >= 0 ? retryAfterMs : exponential;
+  const capped = Math.min(base, policy.maxDelayMs);
+  // Up to +25% spread so parallel callers do not retry in lockstep.
+  return Math.round(capped * (1 + Math.min(Math.max(jitter, 0), 1) * 0.25));
+}
+
 /**
  * Performs a JSON request against an allow-listed host.
  *
- * Retries once on 429/5xx (honouring a short `Retry-After`); anything longer is
- * surfaced as a RATE_LIMITED error rather than blocking the tool call.
+ * Retries 429/5xx responses on an exponential backoff bounded by the retry
+ * policy. Once the attempts or the total delay budget are exhausted, the
+ * failure is surfaced as a RATE_LIMITED / UPSTREAM_ERROR result rather than
+ * blocking the tool call any further.
  */
 export async function fetchJson<T>(rawUrl: string, options: FetchJsonOptions = {}): Promise<T | null> {
   const url = new URL(rawUrl);
@@ -127,6 +208,8 @@ export async function fetchJson<T>(rawUrl: string, options: FetchJsonOptions = {
     source = url.hostname,
   } = options;
 
+  const retry: RetryPolicy = { ...DEFAULT_RETRY, ...(options.retry ?? {}) };
+
   const requestHeaders: Record<string, string> = {
     accept: 'application/json',
     'user-agent': USER_AGENT,
@@ -139,8 +222,9 @@ export async function fetchJson<T>(rawUrl: string, options: FetchJsonOptions = {
     init.body = JSON.stringify(body);
   }
 
-  const maxAttempts = 2;
+  const maxAttempts = Math.max(1, retry.attempts);
   let lastRateLimited: HttpError | null = null;
+  let spentDelayMs = 0;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let res: Response;
@@ -160,6 +244,17 @@ export async function fetchJson<T>(rawUrl: string, options: FetchJsonOptions = {
       throw new HttpError('NOT_FOUND', res.status, rawUrl, `${source} returned 404 Not Found.`);
     }
 
+    // A challenge is deterministic, so retrying it only wastes the caller's
+    // time. Fail immediately with a message that does not promise a retry.
+    if (isBotChallenge(res.status, res.headers)) {
+      throw new HttpError(
+        'BLOCKED',
+        res.status,
+        rawUrl,
+        `${source} served a bot-protection challenge (HTTP ${res.status}) instead of data, so it cannot be queried programmatically. This is not transient — waiting and retrying will not help.`,
+      );
+    }
+
     if (res.status === 429 || res.status >= 500) {
       const wait = retryAfterMs(res);
       const code = res.status === 429 ? 'RATE_LIMITED' : 'UPSTREAM_ERROR';
@@ -171,10 +266,14 @@ export async function fetchJson<T>(rawUrl: string, options: FetchJsonOptions = {
           ? `${source} is rate limiting requests (HTTP 429). Try again in a moment.`
           : `${source} returned HTTP ${res.status}.`,
       );
-      // Only retry when the upstream asks us to wait a short, polite amount.
       if (attempt < maxAttempts) {
-        await sleep(Math.min(wait ?? 500, 2_000));
-        continue;
+        const delay = computeBackoffMs(attempt, retry, wait);
+        // Stop early rather than exceed the caller's total waiting budget.
+        if (spentDelayMs + delay <= retry.maxTotalDelayMs) {
+          spentDelayMs += delay;
+          await sleep(delay);
+          continue;
+        }
       }
       throw lastRateLimited;
     }

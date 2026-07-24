@@ -1,66 +1,24 @@
 /**
- * Package size clients: packagephobia (what `npm install` costs on disk) and
- * bundlephobia (what shipping it to a browser costs).
+ * Bundle size client: bundlephobia, for what shipping a package to a browser
+ * costs.
  *
- * Both are free community services with no auth. Bundlephobia in particular
- * builds packages on demand and frequently returns 429/503 for cold entries, so
- * callers treat a failure here as a missing section, never a failed tool call.
+ * A free community service with no auth. It builds packages on demand and
+ * frequently returns 429/503 for cold entries, so callers treat a failure here
+ * as a missing section, never a failed tool call.
+ *
+ * On-disk install size is *not* fetched from a third party — see
+ * `install-size.ts`, which derives it from npm registry metadata.
  */
 
-import { cached, DEFAULT_TTL_MS, fetchJson } from './http.js';
+import { cached, DEFAULT_TTL_MS, fetchJson, PATIENT_RETRY } from './http.js';
 import { DegradedError } from './errors.js';
 import { downloadSeconds } from './format.js';
 
-const PACKAGEPHOBIA = 'https://packagephobia.com/v2/api.json';
 const BUNDLEPHOBIA = 'https://bundlephobia.com/api/size';
 
 /** Bundlephobia's own reference connection speeds. */
 export const SLOW_3G_KBPS = 50;
 export const EMERGING_4G_KBPS = 875;
-
-export interface InstallSize {
-  /** Bytes downloaded from the registry (the tarball plus dependencies). */
-  publishBytes: number | null;
-  publishFiles: number | null;
-  /** Bytes on disk in node_modules after install, including dependencies. */
-  installBytes: number | null;
-  installFiles: number | null;
-  resolvedVersion: string | null;
-}
-
-interface PackagephobiaResponse {
-  name?: string;
-  version?: string;
-  publish?: { bytes?: number; files?: number; pretty?: string };
-  install?: { bytes?: number; files?: number; pretty?: string };
-  error?: unknown;
-}
-
-export async function getInstallSize(name: string, version: string): Promise<InstallSize> {
-  const spec = `${name}@${version}`;
-
-  return cached(`packagephobia:${spec}`, DEFAULT_TTL_MS, async () => {
-    const url = new URL(PACKAGEPHOBIA);
-    url.searchParams.set('p', spec);
-
-    const raw = await fetchJson<PackagephobiaResponse>(url.toString(), {
-      source: 'packagephobia',
-      notFoundAsNull: true,
-    });
-
-    if (!raw || raw.error) {
-      throw new DegradedError('packagephobia', `packagephobia has no size data for ${spec}.`);
-    }
-
-    return {
-      publishBytes: raw.publish?.bytes ?? null,
-      publishFiles: raw.publish?.files ?? null,
-      installBytes: raw.install?.bytes ?? null,
-      installFiles: raw.install?.files ?? null,
-      resolvedVersion: raw.version ?? null,
-    } satisfies InstallSize;
-  });
-}
 
 export interface BundleSize {
   version: string | null;
@@ -108,6 +66,7 @@ export async function getBundleSize(name: string, version: string): Promise<Bund
       // Bundlephobia builds packages on demand; cold entries are slow.
       timeoutMs: 15_000,
       headers: { 'x-bundlephobia-user': 'package-inspector' },
+      retry: PATIENT_RETRY,
     });
 
     if (!raw || raw.error) {

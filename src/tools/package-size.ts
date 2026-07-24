@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getPackument, getVersionManifest, resolveVersion } from '../lib/npm.js';
-import { getBundleSize, getInstallSize, type BundleSize, type InstallSize } from '../lib/sizes.js';
+import { getBundleSize, type BundleSize } from '../lib/sizes.js';
+import { estimateInstallSize, type InstallSizeEstimate } from '../lib/install-size.js';
 import { optional } from '../lib/errors.js';
 import { humanBytes, humanCount, humanSeconds, lines } from '../lib/format.js';
 import { toolText } from '../lib/response.js';
@@ -38,14 +39,32 @@ export interface PackageSizeResult {
     fileCount: number | null;
   };
 
-  install: {
-    available: boolean;
-    publishSize: SizeField;
-    publishFiles: number | null;
-    installSize: SizeField;
-    installFiles: number | null;
+  /**
+   * Install footprint on disk, derived from npm registry metadata alone — no
+   * third-party size service is involved. Named `estimatedInstall` rather than
+   * `install` because it is a reconstruction, not a measurement: see `method`
+   * and `caveats` on the object itself.
+   */
+  estimatedInstall: {
+    totalSize: SizeField;
+    totalFiles: number | null;
+    selfSize: SizeField;
+    optionalSize: SizeField;
+    packageCount: number;
+    uniqueNames: number;
+    /** Fraction of resolved packages whose size the registry publishes. */
+    coverage: number;
+    missingSizeCount: number;
+    missingSizePackages: string[];
+    conflictingPackages: Array<{ name: string; versions: string[] }>;
+    heaviestPackages: Array<{ name: string; version: string; size: SizeField }>;
+    depthReached: number;
+    truncated: boolean;
+    truncationReason: string | null;
+    method: string;
+    caveats: string[];
     source: string;
-  };
+  } | null;
 
   bundle: {
     available: boolean;
@@ -70,11 +89,33 @@ function buildSummary(result: PackageSizeResult): string {
       } dependencies`
     : 'Bundle size: unavailable (bundlephobia could not build this package).';
 
-  const installLine = result.install.available
-    ? `Install footprint: ${result.install.installSize.human} on disk (${humanCount(
-        result.install.installFiles,
-      )} files), ${result.install.publishSize.human} downloaded`
-    : 'Install footprint: unavailable (packagephobia has no data for this version).';
+  const estimate = result.estimatedInstall;
+  const estimateLine = estimate
+    ? `Install footprint (estimated from registry metadata): ~${estimate.totalSize.human} on disk across ${
+        estimate.packageCount
+      } package${estimate.packageCount === 1 ? '' : 's'}` +
+      (estimate.optionalSize.bytes ? `, of which ${estimate.optionalSize.human} is optional deps` : '') +
+      (estimate.coverage < 1
+        ? ` · lower bound: the registry publishes no size for ${estimate.missingSizeCount} of ${estimate.packageCount} packages (mostly pre-2018 publishes)`
+        : '') +
+      (estimate.truncated ? ' · ⚠️ walk truncated, so more is uncounted' : '')
+    : null;
+
+  // Pointless for a zero-dependency package, where the only entry is itself.
+  const estimateHeaviest =
+    estimate && estimate.packageCount > 1 && estimate.heaviestPackages.length > 0
+      ? `Heaviest packages on disk: ${estimate.heaviestPackages
+          .map((pkg) => `${pkg.name}@${pkg.version} (${pkg.size.human})`)
+          .join(', ')}`
+      : null;
+
+  const conflicts =
+    estimate && estimate.conflictingPackages.length > 0
+      ? `⚠️ ${estimate.conflictingPackages.length} package(s) resolve at multiple versions and are counted once each: ${estimate.conflictingPackages
+          .slice(0, 3)
+          .map((entry) => `${entry.name} (${entry.versions.join(', ')})`)
+          .join('; ')}`
+      : null;
 
   const shakeable =
     result.bundle.treeShakeable === null
@@ -93,7 +134,7 @@ function buildSummary(result: PackageSizeResult): string {
   return lines(
     `${result.name}@${result.resolvedVersion} size report`,
     '',
-    installLine,
+    estimateLine,
     bundleLine,
     result.tarball.unpackedSize.bytes !== null
       ? `Tarball unpacked (this package alone): ${result.tarball.unpackedSize.human} across ${humanCount(
@@ -104,6 +145,8 @@ function buildSummary(result: PackageSizeResult): string {
       ? `Download time for the bundle: ${result.bundle.downloadTime.slow3g} on slow 3G, ${result.bundle.downloadTime.emerging4g} on 4G`
       : null,
     shakeable,
+    conflicts,
+    estimateHeaviest,
     heaviest
   );
 }
@@ -148,27 +191,59 @@ function shapeBundle(bundle: BundleSize | null): PackageSizeResult['bundle'] {
   };
 }
 
-function shapeInstall(install: InstallSize | null): PackageSizeResult['install'] {
+const ESTIMATE_CAVEATS: readonly string[] = Object.freeze([
+  'Counts each distinct name@version once, approximating npm hoisting; a real install duplicates a package when dependents need incompatible versions.',
+  'Includes optional dependencies, which npm skips when their os/cpu do not match the host. Subtract optionalSize for a platform-agnostic floor.',
+  'Cannot see lockfile pins, overrides/resolutions, or bundledDependencies.',
+  'Excludes devDependencies, matching a production install.',
+]);
+
+function shapeEstimate(estimate: InstallSizeEstimate | null): PackageSizeResult['estimatedInstall'] {
+  if (!estimate) return null;
+
+  const caveats = [...ESTIMATE_CAVEATS];
+  if (estimate.coverage < 1) {
+    caveats.push(
+      `${estimate.missingSizeCount} of ${estimate.packageCount} packages publish no unpackedSize, so the total is a lower bound.`,
+    );
+  }
+  if (estimate.truncated && estimate.truncationReason) caveats.push(estimate.truncationReason);
+
   return {
-    available: install !== null,
-    publishSize: size(install?.publishBytes ?? null),
-    publishFiles: install?.publishFiles ?? null,
-    installSize: size(install?.installBytes ?? null),
-    installFiles: install?.installFiles ?? null,
-    source: 'https://packagephobia.com'
+    totalSize: size(estimate.totalBytes),
+    totalFiles: estimate.totalFiles,
+    selfSize: size(estimate.selfBytes),
+    optionalSize: size(estimate.optionalBytes),
+    packageCount: estimate.packageCount,
+    uniqueNames: estimate.uniqueNames,
+    coverage: estimate.coverage,
+    missingSizeCount: estimate.missingSizeCount,
+    missingSizePackages: estimate.missingSizePackages,
+    conflictingPackages: estimate.conflictingPackages,
+    heaviestPackages: estimate.heaviestPackages.map((pkg) => ({
+      name: pkg.name,
+      version: pkg.version,
+      size: size(pkg.bytes),
+    })),
+    depthReached: estimate.depthReached,
+    truncated: estimate.truncated,
+    truncationReason: estimate.truncationReason,
+    method: 'Sum of dist.unpackedSize across the resolved production dependency graph.',
+    caveats,
+    source: 'https://registry.npmjs.org',
   };
 }
 
 export async function packageSize(args: PackageSizeInput): Promise<PackageSizeResult> {
   const packument = await getPackument(args.name);
   const resolved = resolveVersion(packument, args.version);
-  const [manifest, installResult, bundleResult] = await Promise.all([
+  const [manifest, bundleResult, estimateResult] = await Promise.all([
     getVersionManifest(packument.name, resolved.version),
-    optional('packagephobia', () => getInstallSize(packument.name, resolved.version)),
-    optional('bundlephobia', () => getBundleSize(packument.name, resolved.version))
+    optional('bundlephobia', () => getBundleSize(packument.name, resolved.version)),
+    optional('registry install estimate', () => estimateInstallSize(packument.name, resolved.version))
   ]);
 
-  const notes = [installResult.note, bundleResult.note].filter((note): note is string => note !== null);
+  const notes = [bundleResult.note, estimateResult.note].filter((note): note is string => note !== null);
 
   return {
     name: packument.name,
@@ -178,7 +253,7 @@ export async function packageSize(args: PackageSizeInput): Promise<PackageSizeRe
       unpackedSize: size(manifest.dist?.unpackedSize ?? null),
       fileCount: manifest.dist?.fileCount ?? null,
     },
-    install: shapeInstall(installResult.value),
+    estimatedInstall: shapeEstimate(estimateResult.value),
     bundle: shapeBundle(bundleResult.value),
     notes
   };
@@ -188,11 +263,11 @@ export const packageSizeTool = defineTool({
   name: 'package_size',
   title: 'Measure package size',
   description:
-    'Measure what a package actually costs: install footprint from packagephobia (bytes downloaded and bytes on disk ' +
-    'in node_modules, including dependencies) and browser bundle cost from bundlephobia (minified and min+gzip size, ' +
-    'dependency count, whether it is tree-shakeable, and download-time estimates on slow 3G/4G). Use this for "how big ' +
-    'is X", "will X bloat my bundle", or when comparing candidate libraries by weight. Degrades gracefully when a ' +
-    'size service has no data.',
+    'Measure what a package actually costs. Returns the on-disk install footprint, derived from npm registry metadata ' +
+    'by resolving the production dependency graph and summing unpacked sizes (reported as an estimate, with a coverage ' +
+    'figure and caveats), plus browser bundle cost from bundlephobia (minified and min+gzip size, dependency count, ' +
+    'whether it is tree-shakeable, and download-time estimates on slow 3G/4G). Use this for "how big is X", "will X ' +
+    'bloat my bundle", or when comparing candidate libraries by weight.',
   inputSchema,
   input,
   handler: async (args) => {

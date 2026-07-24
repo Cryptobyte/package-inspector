@@ -16,7 +16,7 @@ Developed for demo on [MCP Commons](https://mcpcommons.com) an MCP marketplace f
 | **`list_versions`** | Recent versions newest-first with publish dates, latest/deprecated markers, and release-cadence stats (median gap, releases in the last 90 days). |
 | **`dependency_tree`** | Resolves the install graph to a given depth with unique-dependency counts, max depth, version conflicts, install-script detection, and the heaviest sub-trees. |
 | **`check_vulnerabilities`** | Known CVEs/GHSAs for an exact version from OSV, each with CVSS severity, affected ranges and fixed versions, plus the smallest upgrade that clears everything. |
-| **`package_size`** | Install footprint (bytes downloaded and on disk) and browser bundle cost (minified, min+gzip, tree-shakeability, 3G/4G download times). |
+| **`package_size`** | On-disk install footprint, derived from registry metadata with no third-party service, plus browser bundle cost (minified, min+gzip, tree-shakeability, 3G/4G download times). |
 | **`compare_versions`** | Diffs two versions: dependencies added/removed/bumped, bundle-size delta, time between releases, engine and license changes, breaking-change verdict. |
 | **`analyze_supply_chain`** | Weighted, explainable risk report: install scripts, bus factor, provenance, deprecation, license risk, adoption, known vulns, and typosquatting similarity. |
 | **`search_packages`** | Registry search with weekly downloads and npm's quality/popularity/maintenance scores attached. |
@@ -147,14 +147,13 @@ running the unrelated npm package rather than this server — see the warning ab
 
 ## What it talks to
 
-Package Inspector makes outbound HTTPS requests to **exactly five hosts, and nothing else**:
+Package Inspector makes outbound HTTPS requests to **exactly four hosts, and nothing else**:
 
 | Host | Used for |
 | --- | --- |
-| `registry.npmjs.org` | Package metadata, version manifests, search, provenance attestations |
+| `registry.npmjs.org` | Package metadata, version manifests, search, provenance attestations, install-size data |
 | `api.npmjs.org` | Download counts |
 | `api.osv.dev` | Vulnerability advisories (OSV, which aggregates GHSA + CVE + npm advisories) |
-| `packagephobia.com` | Install size (bytes downloaded, bytes on disk) |
 | `bundlephobia.com` | Bundle size (minified, min+gzip) |
 
 This list is enforced in code, not just documented. There is exactly **one** `fetch()` call in the entire server, in [`src/lib/http.ts`](src/lib/http.ts), and it is gated by an `assertAllowedHost` check that rejects any host outside the allowlist and refuses plain HTTP. You can verify the whole network surface by reading one file, and the test suite asserts it:
@@ -213,7 +212,9 @@ Being useful means being honest about limits:
 - **"No known vulnerabilities" means none have been *reported*.** It is not an audit, and OSV coverage is not complete.
 - **Supply-chain risk is a heuristic over metadata.** It can flag suspicious signals; it cannot detect malicious code. Every finding is listed with its reason and weight so you can disagree with any individual one.
 - **Download counts include CI and mirror traffic**, so they measure automated pulls as much as human adoption.
-- **bundlephobia and packagephobia are third-party community services** that build packages on demand. They rate-limit and sometimes have no data; when that happens the tool reports the gap as a note and returns everything else rather than failing.
+- **bundlephobia is a third-party community service** that builds packages on demand. It rate-limits and sometimes has no data; when that happens the tool reports the gap as a note and returns everything else rather than failing.
+- **Install size is derived from npm registry metadata**, in the `estimatedInstall` section, so it needs nothing but `registry.npmjs.org`. It resolves the production dependency graph and sums `dist.unpackedSize` for every distinct `name@version`. Measured against a real `npm install express@4.18.2`, the estimate came to **1,999,033 bytes vs 2,198,164 actual — 90.9%**, the shortfall being 17 dependencies published before npm began recording `unpackedSize` in ~2018. It is a **lower bound**, and the output always reports `coverage` so you can see how complete a given sum is. It also cannot see lockfile pins, `overrides`/`resolutions`, or `bundledDependencies`, counts optional dependencies that npm skips on non-matching `os`/`cpu` (reported separately as `optionalSize`), and approximates hoisting by counting each distinct version once — packages resolving at multiple versions are listed under `conflictingPackages`.
+- **Bot challenges are detected, not solved.** Some hosts sit behind Vercel or Cloudflare bot protection, which answers automated requests with an HTTP 429 and an HTML challenge page rather than JSON. The server detects that (`x-vercel-mitigated: challenge`, or HTML where JSON was requested), reports it as `BLOCKED`, and does **not** retry — a challenge is deterministic, so retrying would only waste time and keep hammering a host that already declined. No attempt is ever made to solve or bypass one.
 
 ---
 
@@ -238,7 +239,8 @@ src/
     http.ts           The only network boundary: allowlist, timeouts, TTL cache
     npm.ts            Registry, download-count, search and attestation clients
     osv.ts            Vulnerability advisory client
-    sizes.ts          packagephobia + bundlephobia clients
+    sizes.ts          bundlephobia bundle-size client
+    install-size.ts   Registry-derived install footprint estimation
     semver.ts         Dependency-free semver parsing and range matching
     cvss.ts           CVSS v3 base score calculation
     format.ts         Byte/date/percentage humanisation

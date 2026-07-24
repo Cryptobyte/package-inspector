@@ -13,6 +13,8 @@ export type ToolErrorCode =
   | 'UPSTREAM_UNAVAILABLE'
   | 'TIMEOUT'
   | 'RATE_LIMITED'
+  /** Upstream served a bot-protection challenge; retrying cannot clear it. */
+  | 'BLOCKED'
   | 'TOO_LARGE'
   | 'INTERNAL';
 
@@ -41,7 +43,7 @@ export class HttpError extends ToolError {
   }
 }
 
-/** Thrown when an optional upstream (bundlephobia, packagephobia, OSV…) fails. */
+/** Thrown when an optional upstream (bundlephobia, OSV…) fails. */
 export class DegradedError extends ToolError {
   readonly source: string;
 

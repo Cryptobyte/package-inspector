@@ -180,6 +180,47 @@ describe('computeCadence', () => {
     );
     assert.equal(cadence.averageDaysBetweenReleases, 10);
   });
+
+  it('reports lastPublishedAt as the newest real publish', () => {
+    const cadence = computeCadence(
+      [
+        { version: '1.0.0', publishedAt: '2024-01-01T00:00:00Z' },
+        { version: '1.1.0', publishedAt: '2024-05-02T00:00:00Z' },
+        { version: '1.0.1', publishedAt: '2024-03-01T00:00:00Z' },
+      ],
+      now,
+    );
+    assert.equal(cadence.lastPublishedAt, '2024-05-02T00:00:00.000Z');
+  });
+
+  it('keeps lastPublishedAt and daysSinceLastRelease consistent', () => {
+    // Regression: the summary once read lastPublishedAt off the packument's
+    // `modified` field, which bumps when an old version is deprecated. That made
+    // a dormant package look ~7 weeks fresher than its last actual release.
+    const asOf = new Date('2026-07-24T12:00:00Z');
+    const cadence = computeCadence(
+      [
+        { version: '5.6.0', publishedAt: '2025-08-17T07:27:47.572Z' },
+        // A later packument `modified` (e.g. deprecating an old version) must
+        // not be mistaken for a release.
+        { version: '5.6.2', publishedAt: '2025-09-08T14:47:54.486Z' },
+      ],
+      asOf,
+    );
+
+    assert.equal(cadence.lastPublishedAt, '2025-09-08T14:47:54.486Z');
+    assert.equal(cadence.daysSinceLastRelease, 319);
+
+    // The two must describe the same instant, not merely both be present.
+    const impliedDays = Math.round((asOf.getTime() - Date.parse(cadence.lastPublishedAt!)) / 86_400_000);
+    assert.equal(impliedDays, cadence.daysSinceLastRelease);
+  });
+
+  it('returns a null lastPublishedAt when nothing has a publish time', () => {
+    const cadence = computeCadence([{ version: '1.0.0', publishedAt: null }], now);
+    assert.equal(cadence.lastPublishedAt, null);
+    assert.equal(cadence.daysSinceLastRelease, null);
+  });
 });
 
 describe('computeTrendWindows', () => {
