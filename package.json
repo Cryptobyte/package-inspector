@@ -1,0 +1,66 @@
+{
+  "name": "package-inspector",
+  "version": "0.1.0",
+  "description": "MCP server giving AI assistants deep insight into npm packages: metadata, versions, dependency trees, vulnerabilities, size, supply-chain risk and download trends.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Cryptobyte",
+  "homepage": "https://github.com/Cryptobyte/package-inspector#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cryptobyte/package-inspector.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Cryptobyte/package-inspector/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "npm",
+    "registry",
+    "dependencies",
+    "vulnerabilities",
+    "osv",
+    "supply-chain",
+    "bundle-size",
+    "ai",
+    "llm"
+  ],
+  "bin": {
+    "package-inspector": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "mcp-commons": {
+    "run": "src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"fs.chmodSync('dist/index.js', 0o755)\"",
+    "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true});fs.rmSync('build-test',{recursive:true,force:true})\"",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test \"build-test/test/*.test.js\"",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
