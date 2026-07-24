@@ -4,6 +4,8 @@
 
 Package Inspector is a local [Model Context Protocol](https://modelcontextprotocol.io) server that lets an AI coding assistant answer real questions about npm dependencies: what a package is, who maintains it, what it pulls in, whether it has known CVEs, how much it weighs, whether it looks like a supply-chain risk, and whether anyone actually uses it. It reads from public registry and advisory APIs, cross-references the signals, and returns both a plain-language verdict and structured JSON — so the assistant can answer immediately or reason further. It needs no API keys, no account, and no configuration.
 
+[![MCP Commons](https://mcpcommons.com/badge/package-inspector.svg)](https://mcpcommons.com/listing/package-inspector)
+
 Developed for demo on [MCP Commons](https://mcpcommons.com) an MCP marketplace for free and paid MCP servers. See [Deploy Scripts](/.github/) for an auto deploy script example.
 
 ---
