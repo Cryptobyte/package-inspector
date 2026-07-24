@@ -5,7 +5,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { TOOLS, TOOLS_BY_NAME } from '../src/tools/index.js';
@@ -113,6 +113,46 @@ describe('network allowlist', () => {
     await assert.rejects(
       () => fetchJson('https://registry.npmjs.org.evil.example/lodash'),
       (err: unknown) => err instanceof ToolError,
+    );
+  });
+
+  // These hostnames appear in the source as strings — repository URLs that
+  // `normalizeRepositoryUrl` builds for display, the project HOMEPAGE in the
+  // User-Agent, and the `source` attribution on advisories. Scanners flag them
+  // as outbound hosts; these assertions prove they are not reachable.
+  it('refuses the code-hosting and attribution hosts that appear only as data', async () => {
+    for (const url of [
+      'https://github.com/lodash/lodash',
+      'https://gitlab.com/a/b',
+      'https://osv.dev/vulnerability/GHSA-35jh-r3h4-6jhm',
+      'https://raw.githubusercontent.com/a/b/main/package.json',
+    ]) {
+      await assert.rejects(
+        () => fetchJson(url),
+        (err: unknown) => err instanceof ToolError && /disallowed host/.test(err.message),
+        `${url} must not be reachable`,
+      );
+    }
+  });
+
+  it('routes every network call through the single guarded fetch in http.ts', () => {
+    // The README claims exactly one fetch() call site. Keep that true.
+    const sourceDir = resolve(process.cwd(), 'src');
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = resolve(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith('.ts')) files.push(full);
+      }
+    };
+    walk(sourceDir);
+
+    const callSites = files.filter((file) => /(?<![.\w])fetch\s*\(/.test(readFileSync(file, 'utf8')));
+    assert.deepEqual(
+      callSites.map((file) => file.slice(sourceDir.length + 1)),
+      ['lib/http.ts'],
+      'a new fetch() appeared outside the allowlisted wrapper',
     );
   });
 });

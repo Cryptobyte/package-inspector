@@ -157,7 +157,23 @@ Package Inspector makes outbound HTTPS requests to **exactly five hosts, and not
 | `packagephobia.com` | Install size (bytes downloaded, bytes on disk) |
 | `bundlephobia.com` | Bundle size (minified, min+gzip) |
 
-This list is enforced in code, not just documented. Every request in the server goes through a single `fetchJson` function in [`src/lib/http.ts`](src/lib/http.ts) that rejects any host outside the allowlist and refuses plain HTTP — you can verify the whole network surface by reading one file, and the test suite asserts it.
+This list is enforced in code, not just documented. There is exactly **one** `fetch()` call in the entire server, in [`src/lib/http.ts`](src/lib/http.ts), and it is gated by an `assertAllowedHost` check that rejects any host outside the allowlist and refuses plain HTTP. You can verify the whole network surface by reading one file, and the test suite asserts it:
+
+```bash
+grep -rn "fetch(" src/     # exactly one hit: src/lib/http.ts
+```
+
+### Hostnames that appear in the code but are never contacted
+
+Automated scanners often flag `github.com`, `gitlab.com` and `osv.dev` in this repo. None of them are network destinations — they are URL-shaped **strings**, not fetch targets:
+
+| Hostname | Why it appears | Contacted? |
+| --- | --- | --- |
+| `github.com` | `normalizeRepositoryUrl` in [`src/lib/format.ts`](src/lib/format.ts) rewrites npm's `repository` field into a canonical URL (`git@github.com:a/b` → `https://github.com/a/b`) for display. It is also the project's own `HOMEPAGE`, embedded in the `User-Agent` string, and it shows up in advisory `references` that OSV returns **as data**. | No |
+| `gitlab.com` | Appears only in one unit-test assertion for the same URL-normalising function. It occurs nowhere in `src/`. | No |
+| `osv.dev` | A `source: "https://osv.dev"` attribution field in `check_vulnerabilities` output, so consumers know where the advisories came from. The actual endpoint is `api.osv.dev`, listed above. | No |
+
+Repository URLs are normalised for display and returned in the JSON so a human or model can click them. The server never resolves, fetches, or validates them, and a request to any of these hosts throws before a socket is opened.
 
 **Privacy and safety properties:**
 
