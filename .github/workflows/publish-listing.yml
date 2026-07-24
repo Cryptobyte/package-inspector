@@ -1,0 +1,137 @@
+name: Publish to MCP Commons
+
+# Publishes a new version of the listing at
+# https://mcpcommons.com/listing/package-inspector whenever a GitHub release is
+# published. The MCP Commons API has no update endpoint for listing metadata
+# (name, summary, tags, category live in the dashboard) — releasing publishes a
+# new *version* for review, which is what this does.
+#
+# Setup, once:
+#   1. Mint an API key at https://mcpcommons.com/keys
+#   2. Add it as a repository secret named MCPC_API_KEY
+#      (Settings → Secrets and variables → Actions)
+#   3. Connect GitHub to your MCP Commons account, or the API returns
+#      403 github_not_connected
+on:
+  release:
+    types: [published]
+
+  # Manual re-run, e.g. after fixing a rejected submission.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag to publish (e.g. v1.0.6). Defaults to the latest release.'
+        required: false
+        type: string
+      dry_run:
+        description: 'Print the request without sending it.'
+        required: false
+        type: boolean
+        default: false
+      allow_version_mismatch:
+        description: 'Publish even if package.json disagrees with the tag.'
+        required: false
+        type: boolean
+        default: false
+
+# The endpoint allows only 10 publishes per hour; never run two at once.
+concurrency:
+  group: mcpcommons-publish
+  cancel-in-progress: false
+
+env:
+  MCPC_SLUG: package-inspector
+  MCPC_TRANSPORT: stdio
+  MCPC_LANGUAGE: typescript
+
+jobs:
+  publish:
+    name: Publish version to MCP Commons
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          TAG="${INPUT_TAG:-$RELEASE_TAG}"
+          if [ -z "$TAG" ]; then
+            echo "::error::No tag to publish. Trigger from a release, or pass the tag input."
+            exit 1
+          fi
+          echo "tag=$TAG"             >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}"     >> "$GITHUB_OUTPUT"
+          echo "Publishing tag $TAG (version ${TAG#v})"
+
+      - name: Check out the tagged commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Gate the publish on a green build. Submitting a broken release to a
+      # public marketplace is worse than a late release. This also catches a
+      # forgotten version bump: test/server.test.ts asserts that the hardcoded
+      # SERVER_VERSION matches package.json.
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify the tag matches package.json
+        if: ${{ !inputs.allow_version_mismatch }}
+        env:
+          EXPECTED: ${{ steps.tag.outputs.version }}
+        run: |
+          ACTUAL="$(node -p "require('./package.json').version")"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Tag is v$EXPECTED but package.json says $ACTUAL. Bump package.json (and src/lib/version.ts) to match the tag, or re-run with allow_version_mismatch."
+            exit 1
+          fi
+          echo "package.json version $ACTUAL matches the tag."
+
+      # Derive the declared egress allowlist from the code itself rather than
+      # hardcoding it here. ALLOWED_HOSTS in src/lib/http.ts is the single point
+      # every outbound request passes through, so the listing can never drift
+      # from what the server actually contacts.
+      - name: Derive egress allowlist from ALLOWED_HOSTS
+        id: egress
+        run: |
+          HOSTS="$(node --input-type=module -e "
+            const { ALLOWED_HOSTS } = await import('./dist/lib/http.js');
+            if (!Array.isArray(ALLOWED_HOSTS) || ALLOWED_HOSTS.length === 0) {
+              throw new Error('ALLOWED_HOSTS is missing or empty');
+            }
+            process.stdout.write(JSON.stringify([...ALLOWED_HOSTS]));
+          ")"
+          echo "hosts=$HOSTS" >> "$GITHUB_OUTPUT"
+          echo "Declaring egress allowlist: $HOSTS"
+
+      - name: Publish version
+        env:
+          MCPC_API_KEY: ${{ secrets.MCPC_API_KEY }}
+          MCPC_SLUG: ${{ env.MCPC_SLUG }}
+          MCPC_VERSION: ${{ steps.tag.outputs.version }}
+          MCPC_REF: ${{ steps.tag.outputs.tag }}
+          MCPC_REPO: ${{ github.repository }}
+          MCPC_LANGUAGE: ${{ env.MCPC_LANGUAGE }}
+          MCPC_TRANSPORT: ${{ env.MCPC_TRANSPORT }}
+          MCPC_EGRESS: ${{ steps.egress.outputs.hosts }}
+          MCPC_DRY_RUN: ${{ inputs.dry_run }}
+        run: node .github/scripts/publish-listing.mjs

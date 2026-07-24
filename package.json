@@ -1,6 +1,6 @@
 {
   "name": "package-inspector",
-  "version": "0.1.0",
+  "version": "0.1.6",
   "description": "MCP server giving AI assistants deep insight into npm packages: metadata, versions, dependency trees, vulnerabilities, size, supply-chain risk and download trends.",
   "type": "module",
   "private": true,
