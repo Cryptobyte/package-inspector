@@ -144,6 +144,26 @@ describe('network allowlist', () => {
     }
   });
 
+  // The release tooling in .github/scripts talks to mcpcommons.com, but it runs
+  // in CI and is not part of the shipped server. Static scanners cannot tell the
+  // two apart, so this asserts the boundary rather than asking anyone to trust
+  // it: nothing the server actually runs may reference that host.
+  it('keeps the CI publishing host out of the runtime source tree', () => {
+    const sourceDir = resolve(process.cwd(), 'src');
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = resolve(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith('.ts') && readFileSync(full, 'utf8').includes('mcpcommons')) {
+          offenders.push(full.slice(sourceDir.length + 1));
+        }
+      }
+    };
+    walk(sourceDir);
+    assert.deepEqual(offenders, [], 'mcpcommons.com must never appear in runtime code');
+  });
+
   it('routes every network call through the single guarded fetch in http.ts', () => {
     // The README claims exactly one fetch() call site. Keep that true.
     const sourceDir = resolve(process.cwd(), 'src');

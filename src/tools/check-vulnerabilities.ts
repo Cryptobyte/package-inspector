@@ -124,7 +124,10 @@ export async function checkVulnerabilities(args: CheckVulnerabilitiesInput): Pro
     advisories: report.advisories,
     safeUpgradeVersions: safeUpgradeVersions.slice(0, 20),
     recommendedUpgrade: safeUpgradeVersions.length > 0 ? (safeUpgradeVersions[safeUpgradeVersions.length - 1] ?? null) : null,
-    source: 'https://osv.dev'
+    // The exact endpoint the advisories came from, rather than the OSV web
+    // front end, so every hostname appearing anywhere in this file is one the
+    // egress allowlist actually covers.
+    source: 'https://api.osv.dev'
   };
 }
 

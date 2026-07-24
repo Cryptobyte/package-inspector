@@ -1,6 +1,6 @@
 {
   "name": "package-inspector",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "MCP server giving AI assistants deep insight into npm packages: metadata, versions, dependency trees, vulnerabilities, size, supply-chain risk and download trends.",
   "type": "module",
   "private": true,
@@ -44,7 +44,7 @@
     "LICENSE"
   ],
   "mcp-commons": {
-    "run": "src/index.ts"
+    "run": "dist/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node -e \"fs.chmodSync('dist/index.js', 0o755)\"",
@@ -52,7 +52,8 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js"
+    "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js",
+    "prepare": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
