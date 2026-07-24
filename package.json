@@ -1,6 +1,6 @@
 {
   "name": "package-inspector",
-  "version": "0.1.6",
+  "version": "1.0.6",
   "description": "MCP server giving AI assistants deep insight into npm packages: metadata, versions, dependency trees, vulnerabilities, size, supply-chain risk and download trends.",
   "type": "module",
   "private": true,
@@ -52,7 +52,7 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test \"build-test/test/*.test.js\""
+    "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
