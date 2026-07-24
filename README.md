@@ -35,16 +35,18 @@ Every tool returns a short human-readable verdict **and** a pretty-printed JSON 
 
 ## Install and run
 
-### Option 1 — npx (recommended)
+This server is **not published to npm** and is run from source.
+
+> [!WARNING]
+> Do **not** run `npx -y package-inspector`. The name `package-inspector` is already
+> taken on the public npm registry by an unrelated third-party CLI, so that command
+> downloads and executes someone else's code — not this server. It is not an MCP
+> server, so it prints usage text and exits, and your client reports
+> "Server transport closed unexpectedly". Always use an absolute path to your own
+> build, as shown below.
 
 ```bash
-npx -y package-inspector
-```
-
-### Option 2 — from source
-
-```bash
-git clone https://github.com/cryptobyte/package-inspector.git
+git clone https://github.com/Cryptobyte/package-inspector.git
 cd package-inspector
 npm install
 npm run build
@@ -57,6 +59,11 @@ The server speaks MCP over stdio, so running it directly just waits for a client
 
 ## Client configuration
 
+Every example below uses an absolute path to `dist/index.js`. Replace
+`/absolute/path/to/package-inspector` with wherever you cloned the repo, and make
+sure you have run `npm run build` first — the path must point at the compiled
+`dist/index.js`, not at `src/`.
+
 ### Claude Desktop
 
 Add to `claude_desktop_config.json` (**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`, **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`):
@@ -65,19 +72,19 @@ Add to `claude_desktop_config.json` (**macOS**: `~/Library/Application Support/C
 {
   "mcpServers": {
     "package-inspector": {
-      "command": "npx",
-      "args": ["-y", "package-inspector"]
+      "command": "node",
+      "args": ["/absolute/path/to/package-inspector/dist/index.js"]
     }
   }
 }
 ```
 
-Restart Claude Desktop afterwards.
+Restart Claude Desktop afterwards (quit fully — closing the window is not enough).
 
 ### Claude Code
 
 ```bash
-claude mcp add package-inspector -- npx -y package-inspector
+claude mcp add package-inspector -- node /absolute/path/to/package-inspector/dist/index.js
 ```
 
 Or add it to `.mcp.json` in your project root to share it with your team:
@@ -86,8 +93,8 @@ Or add it to `.mcp.json` in your project root to share it with your team:
 {
   "mcpServers": {
     "package-inspector": {
-      "command": "npx",
-      "args": ["-y", "package-inspector"]
+      "command": "node",
+      "args": ["/absolute/path/to/package-inspector/dist/index.js"]
     }
   }
 }
@@ -101,8 +108,8 @@ Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per-project):
 {
   "mcpServers": {
     "package-inspector": {
-      "command": "npx",
-      "args": ["-y", "package-inspector"]
+      "command": "node",
+      "args": ["/absolute/path/to/package-inspector/dist/index.js"]
     }
   }
 }
@@ -117,27 +124,24 @@ Add to `.vscode/mcp.json` in your workspace:
   "servers": {
     "package-inspector": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "package-inspector"]
-    }
-  }
-}
-```
-
-### Running from a local clone
-
-Replace the `command`/`args` with an absolute path to your build:
-
-```json
-{
-  "mcpServers": {
-    "package-inspector": {
       "command": "node",
       "args": ["/absolute/path/to/package-inspector/dist/index.js"]
     }
   }
 }
 ```
+
+### Verifying it works without a client
+
+If a client reports the server disconnecting, check the build directly — this
+should print an `initialize` response and a list of nine tools:
+
+```bash
+printf '%s\n%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cli","version":"1"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | node dist/index.js
+```
+
+If you see usage text about `repl`, `dl`, `exec` and `cl` commands, you are
+running the unrelated npm package rather than this server — see the warning above.
 
 ---
 
