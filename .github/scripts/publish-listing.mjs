@@ -19,11 +19,11 @@
  * Reads configuration from the environment so nothing sensitive is ever passed
  * on argv (argv is visible to other processes; env is not).
  *
- * Required : MCPC_API_KEY, MCPC_SLUG, MCPC_VERSION, MCPC_REPO, MCPC_REF,
- *            MCPC_TOOLS_FILE (JSON array of { name, description })
- * Optional : MCPC_LANGUAGE (default "typescript"), MCPC_TRANSPORT (default
- *            "stdio"), MCPC_EGRESS (JSON array), MCPC_DRY_RUN ("true"),
- *            MCPC_API_BASE (default "https://mcpcommons.com/api/v1")
+ * Required : MCPC_API_KEY, MCPC_SLUG, MCPC_VERSION, MCPC_REPO, MCPC_REF
+ * Optional : MCPC_TOOLS_FILE (default "tools.json"; collected automatically if
+ *            absent), MCPC_LANGUAGE (default "typescript"), MCPC_TRANSPORT
+ *            (default "stdio"), MCPC_EGRESS (JSON array), MCPC_DRY_RUN
+ *            ("true"), MCPC_API_BASE (default "https://mcpcommons.com/api/v1")
  */
 
 const API_BASE = process.env.MCPC_API_BASE ?? 'https://mcpcommons.com/api/v1';
@@ -76,6 +76,36 @@ function versionFromTag(tag) {
 }
 
 /**
+ * Resolves the tool-surface file, collecting it if it is not already there.
+ *
+ * Deliberately self-sufficient rather than depending on a prior workflow step.
+ * The job checks out the release tag for these scripts while the workflow YAML
+ * comes from the triggering ref, so the two can be from different commits — a
+ * newer script driven by an older workflow would otherwise fail on a variable
+ * the old workflow never learned to set. Defaulting and self-collecting means
+ * this script works no matter which workflow version invokes it.
+ */
+async function resolveToolsFile() {
+  const path = process.env.MCPC_TOOLS_FILE?.trim() || 'tools.json';
+  const { existsSync } = await import('node:fs');
+  if (existsSync(path)) return path;
+
+  console.log(`No tool surface at ${path}; collecting it from the built server.`);
+  const { fileURLToPath } = await import('node:url');
+  const { spawnSync } = await import('node:child_process');
+  const collector = fileURLToPath(new URL('collect-tools.mjs', import.meta.url));
+
+  const result = spawnSync(process.execPath, [collector, path], { stdio: 'inherit' });
+  if (result.status !== 0) {
+    fail(
+      'Could not collect the tool surface, which the API requires.',
+      'Check that the project is built (npm run build) and that the manifest entrypoint boots.',
+    );
+  }
+  return path;
+}
+
+/**
  * Loads the tool surface collected from the running server. Required by the
  * API, and validated here so a malformed file fails before a request is spent
  * against the 10-per-hour limit.
@@ -115,7 +145,7 @@ const ref = required('MCPC_REF');
 const version = versionFromTag(process.env.MCPC_VERSION?.trim() || ref);
 const repo = required('MCPC_REPO');
 
-const tools = await loadTools(required('MCPC_TOOLS_FILE'));
+const tools = await loadTools(await resolveToolsFile());
 
 const body = {
   version,

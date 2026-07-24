@@ -3,6 +3,10 @@ dist/
 build-test/
 *.tsbuildinfo
 
+# Generated at release time by .github/scripts/collect-tools.mjs — always
+# derived from the built server, never hand-maintained, so never committed.
+tools.json
+
 npm-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
